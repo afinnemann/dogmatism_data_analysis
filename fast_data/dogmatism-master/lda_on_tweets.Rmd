@@ -1,0 +1,267 @@
+---
+  title: "LDA on pol"
+author: "Adam Finnemann"
+date: "jan 28, 2018"
+---
+
+```{r setup, include=FALSE}
+
+library(pacman)
+p_load("stringr","tidyverse", "lubridate","lmerTest")
+p_load( "tm","stringr", "tidytext", "topicmodels")
+
+setwd("~/cogsci/ba_project/dogmatism_data_analysis/fast_data/dogmatism-master/data")
+
+
+pol = read.delim("politics-1000.txt", header =F ) %>% 
+rename(txt = V1, dogmatism=V2) %>% 
+mutate(txt = as.character(txt))
+
+reddit = read.delim("reddit-politics-1997.txt", header =F ) %>% 
+rename(txt = V1, dogmatism = V2)%>% 
+mutate(txt = as.character(txt))
+
+```
+
+
+```{r}
+
+
+tweet_to_corpus <- function(df){
+  
+  my_stop_words <- c("nbsp", "amp", "gt", "lt","timesnewromanpsmt", "font","td", "li", "br", "tr", "quot","st", "img", "src", "strong", "http", "file", "files","https", "vcljjqvzb", "sxdoc", "maga", "https", "#maga", "MAGA", "#the", "the")
+                                               
+  
+  tidy_tweets <-df %>% 
+    mutate(text = iconv(text, to = "ASCII//TRANSLIT"), #Convert to basic ASCII text to avoid silly characters
+    text = tolower(text),  # Converting to lower case
+    text = str_replace(text,"rt", " " ),  # Remove the "RT" (retweet) so duplicates are duplicates
+    text = str_replace(text,"@\\w+", " " ),  # Remove user names
+    text = str_replace(text,"http.+ |http.+$", " " ),  # Remove links
+    text = str_replace(text,"[[:punct:]]", " " ),  # Remove punctuation
+    text = str_replace(text,"[ |\t]{2,}", " " ),  # Remove tabs
+    text = str_replace(text,"amp", " " ),  # "&" is "&amp" in HTML, so after punctuation removed ...
+    text = str_replace(text,"^ ", "" ),  # Leading blanks
+    text = str_replace(text," $", "" ),
+    text = str_replace(text," +", " "))  # General spaces (should just do all whitespaces no?)) # Lagging blanks
+
+    
+    
+    corpus <- Corpus(VectorSource(tidy_tweets$text)) %>%  # Create corpus object
+
+# Remove English stop words. This could be greatly expanded!
+          tm_map( removeWords, stopwords("en")) %>% 
+
+# Remove numbers. This could have been done earlier, of course.
+          tm_map(removeNumbers) %>% 
+
+# Stem the words. Google if you dont understand
+          tm_map(stemDocument) %>% 
+
+# Remove the stems associated with our search terms!
+          tm_map(removeWords, my_stop_words)
+  
+  
+  
+  return(corpus)
+}
+
+reddit %>% 
+  rename(text = txt) -> reddit
+
+tweet_corpus <- tweet_to_corpus(reddit)
+
+
+wordcloud(tweet_corpus, min.freq=10, max.words = 50, random.order = TRUE, col = brewer.pal(8, "Dark2"))
+
+
+```
+The next line of code transforms the corpus into a document-term-matrix. Secondly it removes empty documents.
+OBS, it replaces the document order which is unfortunate when we want to merge document number with original text later.
+```{r}
+# Get the lengths and make sure we only create a DTM for tweets with
+# some actual content
+doc.lengths <- rowSums(as.matrix(DocumentTermMatrix(tweet_corpus)))
+dtm <- DocumentTermMatrix(tweet_corpus[doc.lengths > 0])
+
+empty_docs = which(doc.lengths == 0)
+empty_docs
+```
+
+Now, we are essentially ready to train our model on our data
+
+First we need to specify some parameters for the sampling. These parameters are needed since we will use Gibb's sampling. There are different samplers, that estimates the topics in different ways.
+The values of the parameters depends on the trade-off you want between accuracy and time. 
+```{r}
+burnin <- 4000
+iter <- 2000
+thin <- 500
+seed <-list(2003,5,63,100001,765)
+nstart <- 5
+best <- TRUE
+
+```
+
+
+```{r}
+k <- 5
+```
+
+
+```{r}
+Sys.time()
+ldaOut <-LDA(dtm,k, method="Gibbs", control=list(nstart=nstart, seed = seed, best=best, burnin = burnin, iter = iter, thin=thin))
+Sys.time()
+```
+Three minutes to run on 1997 reddit comments on 8 topics.
+
+
+
+
+The next steps visualzied how each word is distributed in each topic.
+```{r}
+ap_topics <- tidy(ldaOut, matrix = "beta")
+ap_topics
+```
+
+Now we want a more fancy representation of our topics. First we need to change the ap_topics into a data frame better suited for ggplot. The code below achieves this.
+Try to make sense of the code. I will suggest that you run the code and look at the result. Secondly, try to compare it with the table you produced above to see the changes made.
+```{r}
+ap_top_terms <- ap_topics %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+ap_top_terms
+```
+
+We can put this data frame into ggplot and have a nice visualization
+```{r}
+ap_top_terms %>%
+  mutate(term = reorder(term, beta)) %>%
+  ggplot(aes(term, beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  coord_flip()
+```
+1: voter preference
+2: ?
+3: ?
+4: goverment
+5: money
+```{r}
+ap_topics <- tidy(ldaOut, matrix = "beta")
+ap_topics
+```
+
+```{r}
+lda_documents <- tidy(ldaOut, matrix = "gamma")
+
+lda_documents
+```
+We want to add the orginal tweets to our data frame. Assuming that your original data is named "da" this is done in the following way.
+Note that lda_documents has a length equal to number_of_topics * number_of_documents. Thus, we want to add da$text five times (ask me if this doesn't make sense to you). Luckily, R is clever enough to know that it should that by itself.
+
+```{r}
+lda_documents %>% 
+  spread(topic, gamma) %>% 
+  mutate(document = as.numeric(as.character(document)))-> lda_df
+
+which(!(1:1997 %in% lda_df$document))
+
+
+```
+
+```{r}
+empty_docs
+```
+```{r}
+text = reddit %>% 
+  select(text, dogmatism)
+
+text2 = text[-empty_docs,]
+
+lda_df2 = cbind(text2,lda_df)
+
+
+p_load(corrgram)
+
+#checking for sufficient covariance
+#the corrgram shows darker areas indicating covariance among predictors
+corrgram(lda_df2[,c(2,4:8)], col.regions = colorRampPalette(c("dodgerblue4",'dodgerblue','white', 'gold',"firebrick4")),cor.method='pearson')
+
+```
+
+```{r}
+lda_df3 = lda_df2 %>% 
+  filter(dogmatism < 8 | dogmatism >12)
+
+colnames(lda_df3) = c("text","dogmatism","document","top1","top2","top3","top4","top5")
+summary(lm(dogmatism ~ top1, data = lda_df3))
+summary(lm(dogmatism ~ top5, data = lda_df3))
+```
+
+
+
+To make interpretations easier, we want to replacee the topic number with the interpretation of the topic.
+Replace the "interpretation_of_topicX" with your word describing the topic.
+
+
+
+
+
+```{r}
+lda_documents <- lda_documents %>% 
+  mutate(topic = as.factor(topic),
+         interpreted_topic = recode(topic, "1" = "voter_pref",
+                                           "2" = "topic2",
+                                           "3" = "reason",
+                                           "4" = "govern",
+                                           "5" = "tax"))
+
+lda_documents
+```
+
+
+
+
+Task: filter 1 document out and plot it's distribution of topics. 
+```{r}
+lda_documents %>% 
+  filter(document == 3) %>% 
+  ggplot(aes(interpreted_topic, gamma, fill = gamma)) +
+  geom_col()
+```
+```{r}
+lda_df3 %>% 
+  filter(top5 > 0.30) -> max_top5
+```
+
+
+```{r}
+lda_df3 %>% 
+  mutate(class =ifelse(dogmatism > 10, "dogmatic","non_dogmatic"),
+         class = as.factor(class)) -> lda_df4
+
+mdl1 = glm(class ~ top5 , data = lda_df4, family = "binomial")
+summary(mdl1)
+```
+```{r}
+p_load(tidyverse, stringr, lmerTest, boot, sjPlot, sjmisc, sjlabelled, caret, pROC)
+
+
+lda_df4 <- lda_df4 %>% 
+  mutate(mdl_predictions_perc = inv.logit(predict(mdl1, lda_df4)),
+         predictions = ifelse(mdl_predictions_perc > 0.5, "non_dogmatic","dogmatic"),
+         predictions = as.factor(predictions)) #Schizophrenia is coded as 1
+
+
+caret::confusionMatrix(data = lda_df4$predictions, reference = lda_df4$class, positive = "dogmatic") 
+
+rocCurve <- roc(response = lda_df4$class,   predictor = lda_df4$mdl_predictions_perc) 
+auc(rocCurve) 
+ci(rocCurve) 
+plot.roc(rocCurve)
+
+```
+

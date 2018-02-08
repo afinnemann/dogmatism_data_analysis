@@ -1,0 +1,245 @@
+---
+  title: "R SVM"
+author: "Adam Finnemann"
+date: "jan 18, 2018"
+---
+
+```{r setup, include=FALSE}
+
+library(pacman)
+p_load("stringr","tidyverse", "lubridate","lmerTest")
+p_load(boot, caret,pROC)
+library(e1071)
+
+setwd("~/cogsci/ba_project/dogmatism_data_analysis")
+quant_pol = read.csv("preprocessed_pol.csv")
+quant_reddit = read.csv("preprocessed_reddit.csv")
+```
+
+
+#SVM test on sentiment + you
+
+```{r}
+quant_reddit %>% 
+  ggplot(aes(sentiment, you, color = class)) + 
+  geom_jitter(height = 0.2)
+```
+
+```{r}
+
+
+s = sample(1749,1200)
+
+train_ = quant_reddit %>% 
+  select(sentiment, you, class) %>% 
+  slice(s)
+
+predict_ = quant_reddit %>% 
+  select(sentiment, you, class) %>% 
+  slice(-s)
+
+svmfit = svm(class ~., data = train_, kernel = "linear", cost = 1, scale = F, probability = T)
+svmfit
+```
+
+```{r}
+plot(svmfit, train_)
+```
+
+```{r}
+tuned <- tune(svm, class ~., data = train_, kernel = "linear", ranges = list(cost=c(0.001,0.01,.1,1,10,100)))
+tuned
+```
+
+```{r}
+p = predict(svmfit, predict_, type = "class")
+
+
+predict_ <- predict_ %>% 
+  mutate(predictions_perc = attr(predict(svmfit, predict_, probability = T),"probabilities")[,1],
+         predictions = ifelse(predictions_perc > 0.5, "dogmatic","non_dogmatic"),
+         predictions = as.factor(predictions))
+
+
+caret::confusionMatrix(data = predict_$predictions, reference = predict_$class, positive = "dogmatic") 
+
+rocCurve <- roc(response = predict_$class,   predictor = predict_$predictions_perc) 
+auc(rocCurve) 
+ci(rocCurve) 
+plot.roc(rocCurve)
+
+```
+
+Fitting SVM, using all predictors
+```{r}
+
+s = sample(1749,1200)
+
+train_ = quant_reddit %>% 
+  slice(s)
+
+
+predict_ = quant_reddit %>% 
+  slice(-s) 
+
+svmfit = svm(class ~., data = train_[,c(3,5:89)], kernel = "linear", cost = 10, scale = T, probability = T)
+
+
+svmfit
+```
+
+```{r}
+tuned <- tune(svm, class ~., data = train_[,c(5:20)], scale = T, kernel = "linear", ranges = list(cost=c(0.001,0.01,.1,1,10,100)))
+
+tuned
+```
+```{r}
+p = predict(svmfit, predict_[,c(3,5:89)], type = "class")
+
+
+predict_ <- predict_ %>% 
+  mutate(predictions_perc = attr(predict(svmfit, predict_, probability = T),"probabilities")[,1],
+         predictions = ifelse(predictions_perc > 0.5, "dogmatic","non_dogmatic"),
+         predictions = as.factor(predictions))
+
+
+caret::confusionMatrix(data = predict_$predictions, reference = predict_$class, positive = "dogmatic") 
+
+rocCurve <- roc(response = predict_$class,   predictor = predict_$predictions_perc) 
+auc(rocCurve) 
+ci(rocCurve) 
+plot.roc(rocCurve)
+
+```
+
+
+
+Cross validation
+```{r}
+
+
+cross_validation <- function(data = da, folds_col){ 
+  
+  
+  folds <- createFolds(folds_col, 15)
+  
+  #running loop
+  cross_val <- sapply(seq_along(folds), function(x) {
+    
+    train_folds = filter(data, !(as.numeric(post_id) %in% folds[[x]]))
+    predict_fold = filter(data, as.numeric(post_id) %in% folds[[x]])
+    
+    svmfit = svm(class ~., data = train_folds[,c(3,5:89)], kernel = "linear", cost = 10, scale = T, probability = T)
+    
+
+predict_fold <- predict_fold %>% 
+  mutate(predictions_perc = attr(predict(svmfit, predict_fold, probability = T),"probabilities")[,1],
+         predictions = ifelse(predictions_perc > 0.5, "dogmatic","non_dogmatic"),
+         predictions = as.factor(predictions))
+
+
+rocCurve <- roc(response = predict_fold$class,   predictor = predict_fold$predictions_perc) 
+
+    output <- auc(rocCurve)
+    
+    
+  })
+  
+  auc = mean(cross_val)
+  
+  return(auc)
+}
+
+
+
+Result <- cross_validation(data = quant_reddit,
+                           folds_col = quant_reddit$post_id)
+                           
+Result
+
+```
+
+
+```{r}
+
+setwd("~/cogsci/ba_project/dogmatism_data_analysis")
+quant_pol = read.csv("preprocessed_pol.csv")
+
+
+
+quant_pol <- quant_pol %>% 
+  mutate(predictions_perc = attr(predict(svmfit, quant_pol[,c(3,5:89)], probability = T),"probabilities")[,1],
+         predictions = ifelse(predictions_perc > 0.5, "dogmatic","non_dogmatic"),
+         predictions = as.factor(predictions))
+    
+rocCurve <- roc(response = quant_pol$class,   predictor = quant_pol$predictions_perc) 
+auc(rocCurve) 
+ci(rocCurve) 
+plot.roc(rocCurve)
+
+```
+
+
+Predicting using svm on tweets1 from 2016 first tv debate
+```{r}
+setwd("~/cogsci/ba_project/dogmatism_data_analysis/twitter_data/adam_preproc")
+da12 = read.csv("total_tweets_2012_preproc.csv")
+da16 = read.csv("total_tweets_2016_preproc.csv")
+```
+
+training svm on full reddit data set
+
+```{r}
+svmfit = svm(class ~., data = quant_reddit[,c(3,5:89)], kernel = "linear", cost = 10, scale = T, probability = T)
+```
+
+
+```{r}
+p = predict(svmfit, da16[,c(6:91)], type = "class")
+
+
+da16 <- da16 %>% 
+  mutate(predictions_perc = attr(predict(svmfit, da16[,7:92], probability = T),"probabilities")[,1],
+         predictions = ifelse(predictions_perc > 0.5, "dogmatic","non_dogmatic"),
+         predictions = as.factor(predictions))
+
+
+da16 %>% 
+  group_by(predictions) %>% 
+  tally 
+
+```
+
+% dogmatic in 2016
+```{r}
+
+dogma_16_perc = 260067 / (260067 + 664811)
+dogma_16_perc
+```
+
+```{r}
+da12 <- da12 %>% 
+  mutate(predictions_perc = attr(predict(svmfit, da12[,7:92], probability = T),"probabilities")[,1],
+         predictions = ifelse(predictions_perc > 0.5, "dogmatic","non_dogmatic"),
+         predictions = as.factor(predictions))
+
+
+da12 %>% 
+  group_by(predictions) %>% 
+  tally 
+
+```
+% dogmatic in 2012
+```{r}
+dogma_12_perc = 116837 / (116837 + 192595)
+
+dogma_12_perc
+
+```
+
+
+Hypotheis: dogma 16 > dogma 12
+```{r}
+dogma_16_perc - dogma_12_perc
+```
+9.6% more dogmatic tweets in 2012!

@@ -1,0 +1,122 @@
+---
+title: "Fast data preprocessesing"
+author: "Adam Finnemann"
+date: "jan 18, 2018"
+---
+
+```{r setup, include=FALSE}
+
+library(pacman)
+p_load("stringr","tidyverse", quanteda, "tidytext", sentimentr)
+
+
+setwd("~/cogsci/ba_project/dogmatism_data_analysis/fast_data/dogmatism-master/data")
+
+
+pol = read.delim("nytimes.txt", header =F ) %>% 
+rename(txt = V1, dogmatism=V2) %>% 
+mutate(txt = as.character(txt))
+
+reddit = read.delim("reddit.txt", header =F ) %>% 
+rename(txt = V1, dogmatism = V2)%>% 
+mutate(txt = as.character(txt))
+```
+
+
+```{r}
+quantile(reddit$dogmatism)
+
+quant_reddit = reddit %>% 
+filter(dogmatism < 7 | dogmatism  > 12) %>% 
+mutate(class = ifelse(dogmatism <= 9, "non_dogmatic","dogmatic"),
+class = as.factor(class),
+post_id = as.factor(1:1749))
+
+```
+Question: Fast and Horvitz takes top and bottom quantile and end up with 2500 posts
+
+```{r}
+quantile(pol$dogmatism)
+
+
+quant_pol = pol %>% 
+filter(dogmatism < 9 | dogmatism  > 13) %>% 
+mutate(class = ifelse(dogmatism <= 9, "non_dogmatic","dogmatic"),
+class = as.factor(class),
+post_id = as.factor(1:332))
+
+
+```
+
+
+
+calculating predictor features from sentiment, nrc categories and Fast's features.
+```{r}
+
+
+
+
+#text column should be named txt
+predictors_extract = function(df){
+
+  
+#element_id is a document. sentence_id is number of sentences in element, and word_count is number of words per sentence
+
+sentiment = sentiment(df$txt)
+
+sentiment_per_doc = sentiment %>% 
+group_by(element_id) %>% 
+summarise(sentiment = sum(sentiment))
+
+
+sentiments <- get_sentiments("nrc") 
+
+
+nrc_score_reddit <-df %>%
+unnest_tokens(word, txt) %>%
+inner_join(sentiments, by = "word") %>% 
+group_by(id,sentiment) %>% 
+summarise(nrc_score = n()) %>% 
+ungroup() %>% 
+spread(sentiment,nrc_score, fill = 0)
+
+
+
+
+df = df %>% 
+mutate(confidence = str_count(txt,pattern = "I thought|I think|I don’t know|likely|probably|seem to be|I understood|I understand|I heard|maybe|I wonder|I wondered|personally"),
+you = str_count(txt, pattern = "You are|you are|you're|your"),
+me = str_count(txt, pattern = "I am|I'm|my"),
+compromise = str_count(txt,pattern = "I see|I agree|agreed|Yes|yes|Thanks|thanks"),
+sent_len = str_length(txt),
+sentiment = round(sentiment_per_doc$sentiment,4)) %>% 
+left_join(nrc_score_reddit) 
+
+df[is.na(df)] = 0
+
+
+#liwc analysis
+setwd("~/cogsci/ba_project/dogmatism_data_analysis")
+
+mfdict <- dictionary(file = "LIWC.txt", 
+                    format = "LIWC")
+
+liwc_analysis = dfm(df$txt, dictionary = mfdict) %>% 
+  data.frame() %>% 
+  mutate(post_id = as.factor(1:nrow(df)))
+
+df %>% 
+  mutate(post_id = as.factor(1:nrow(df))) %>% 
+  left_join(liwc_analysis) -> df
+return(df)
+}
+
+preproc_reddit = predictors_extract(quant_reddit)
+preproc_pol = predictors_extract(quant_pol)
+
+```
+```{r}
+write.csv(preproc_pol, "preprocessed_pol.csv", row.names = F)
+write.csv(preproc_reddit, "preprocessed_reddit.csv", row.names = F)
+```
+

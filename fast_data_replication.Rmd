@@ -1,0 +1,558 @@
+---
+title: "R markdown template""
+author: "Adam Finnemann"
+date: "jan 18, 2018"
+---
+
+```{r setup, include=FALSE}
+
+library(pacman)
+p_load("stringr","tidyverse", "lubridate","lmerTest")
+
+
+setwd("~/cogsci/ba_project/dogmatism_data_analysis/fast_data/dogmatism-master/data")
+
+
+pol = read.delim("nytimes.txt", header =F ) %>% 
+  rename(txt = V1, dogmatism=V2) %>% 
+  mutate(txt = as.character(txt))
+
+reddit = read.delim("reddit.txt", header =F ) %>% 
+  rename(txt = V1, dogmatism = V2)%>% 
+  mutate(txt = as.character(txt))
+```
+
+distribution of dogmatism
+
+```{r}
+
+
+reddit %>% 
+  ggplot(aes(dogmatism)) + 
+  geom_histogram(binwidth = 1, col = "dark blue", aes(fill = ..count..))
+
+```
+
+```{r}
+quantile(reddit$dogmatism)
+
+quant_reddit = reddit %>% 
+  filter(dogmatism < 7 | dogmatism  > 12) %>% 
+  mutate(class = ifelse(dogmatism <= 9, "non_dogmatic","dogmatic"),
+         class = as.factor(class),
+         post_id = as.factor(1:1749))
+
+```
+Question: Fast and Horvitz takes top and bottom quantile and end up with 2500 posts
+
+
+calculating sentiment per document (row).
+```{r}
+
+
+
+p_load(sentimentr)
+#element_id is a document. sentence_id is number of sentences in element, and word_count is number of words per sentence
+sentiment = sentiment(quant_reddit$txt)
+
+sentiment_per_doc = sentiment %>% 
+  group_by(element_id) %>% 
+  summarise(sentiment = sum(sentiment))
+
+```
+
+
+calculating nrc scores 
+```{r}
+p_load("tidytext")
+
+
+sentiments <- get_sentiments("nrc") 
+
+
+nrc_score_reddit <-quant_reddit %>%
+  unnest_tokens(word, txt) %>%
+  inner_join(sentiments, by = "word") %>% 
+  group_by(post_id,sentiment) %>% 
+  summarise(nrc_score = n()) %>% 
+  ungroup() %>% 
+  spread(sentiment,nrc_score, fill = 0)
+
+
+
+
+```
+
+
+```{r}
+
+quant_reddit = quant_reddit %>% 
+  mutate(confidence = str_count(txt,pattern = "I thought|I think|I don’t know|likely|probably|seem to be|I understood|I understand|I heard|maybe|I wonder|I wondered|personally"),
+         you = str_count(txt, pattern = "You are|you are|you're|your"),
+         me = str_count(txt, pattern = "I am|I'm|my"),
+         compromise = str_count(txt,pattern = "I see|I agree|agreed|Yes|yes|Thanks|thanks"),
+         sent_len = str_length(txt),
+         sentiment = round(sentiment_per_doc$sentiment,4)) %>% 
+  left_join(nrc_score_reddit)
+
+
+
+
+p_load(corrgram)
+corrgram(quant_reddit[,2:20], col.regions = colorRampPalette(c("dodgerblue4",'dodgerblue','white', 'gold',"firebrick4")),cor.method='pearson')
+
+```
+
+```{r}
+mdl1 = lm(dogmatism ~ confidence + you + me + compromise + sentiment, da = quant_reddit)
+mdl2 = lm(dogmatism ~ disgust, da = quant_reddit)
+summary(mdl1)
+```
+
+cross validating
+
+```{r}
+p_load( MuMIn, psych,  ModelMetrics, caret)
+
+
+
+folds <- createFolds(quant_reddit$post_id, 15)
+
+error <- matrix(nrow = length(folds), ncol = 1)
+
+
+for (i in 1:length(folds)) {
+  train_folds = filter(quant_reddit, !(post_id %in% folds[[i]]))
+  predict_fold = filter(quant_reddit, post_id %in% folds[[i]])
+  
+  train_model <- lm(dogmatism ~ you + sentiment, da = train_folds)
+  
+  test_error <- predict(train_model, predict_fold, allow.new.levels = T)
+  
+  error[i] <- ModelMetrics::rmse(predict_fold$dogmatism,test_error)
+
+
+}
+
+mean(error, na.rm = T)
+
+
+
+
+```
+testing predictors
+
+```{r}
+
+
+folds <- createFolds(quant_reddit$post_id, 15)
+
+error <- matrix(nrow = length(folds), ncol = 1)
+
+
+for (i in 1:length(folds)) {
+  train_folds = filter(quant_reddit, !(post_id %in% folds[[i]]))
+  predict_fold = filter(quant_reddit, post_id %in% folds[[i]])
+  
+  train_model <- lm(dogmatism ~ 1, da = train_folds)
+  
+  test_error <- predict(train_model, predict_fold, allow.new.levels = T)
+  
+  error[i] <- ModelMetrics::rmse(predict_fold$dogmatism,test_error)
+
+
+}
+
+mean(error, na.rm = T)
+
+#error of 4.4 when predicting from intercept only.
+
+
+folds <- createFolds(pol$ID, 5)
+error <- matrix(nrow = length(folds), ncol = 1)
+
+
+for (i in 1:length(folds)) {
+  train_folds = filter(pol, !(ID %in% folds[[i]]))
+  predict_fold = filter(pol, ID %in% folds[[i]])
+  
+  train_model <- lm(dogmatism ~ confidence , da = train_folds)
+  
+  test_error <- predict(train_model, predict_fold, allow.new.levels = T)
+  
+  error[i] <- ModelMetrics::rmse(predict_fold$dogmatism,test_error)
+
+
+}
+
+mean(error, na.rm = T)
+2.558
+
+folds <- createFolds(pol$ID, 5)
+error <- matrix(nrow = length(folds), ncol = 1)
+
+
+for (i in 1:length(folds)) {
+  train_folds = filter(pol, !(ID %in% folds[[i]]))
+  predict_fold = filter(pol, ID %in% folds[[i]])
+  
+  train_model <- lm(dogmatism ~ you, da = train_folds)
+  
+  test_error <- predict(train_model, predict_fold, allow.new.levels = T)
+  
+  error[i] <- ModelMetrics::rmse(predict_fold$dogmatism,test_error)
+
+
+}
+
+mean(error, na.rm = T)
+2.54
+
+
+folds <- createFolds(pol$ID, 5)
+error <- matrix(nrow = length(folds), ncol = 1)
+
+
+for (i in 1:length(folds)) {
+  train_folds = filter(pol, !(ID %in% folds[[i]]))
+  predict_fold = filter(pol, ID %in% folds[[i]])
+  
+  train_model <- lm(dogmatism ~  me , da = train_folds)
+  
+  test_error <- predict(train_model, predict_fold, allow.new.levels = T)
+  
+  error[i] <- ModelMetrics::rmse(predict_fold$dogmatism,test_error)
+
+
+}
+
+mean(error, na.rm = T)
+2.57
+
+folds <- createFolds(pol$ID, 5)
+error <- matrix(nrow = length(folds), ncol = 1)
+
+
+for (i in 1:length(folds)) {
+  train_folds = filter(pol, !(ID %in% folds[[i]]))
+  predict_fold = filter(pol, ID %in% folds[[i]])
+  
+  train_model <- lm(dogmatism ~ compromise, da = train_folds)
+  
+  test_error <- predict(train_model, predict_fold, allow.new.levels = T)
+  
+  error[i] <- ModelMetrics::rmse(predict_fold$dogmatism,test_error)
+
+
+}
+
+mean(error, na.rm = T)
+
+2.57
+
+folds <- createFolds(pol$ID, 5)
+error <- matrix(nrow = length(folds), ncol = 1)
+
+
+for (i in 1:length(folds)) {
+  train_folds = filter(pol, !(ID %in% folds[[i]]))
+  predict_fold = filter(pol, ID %in% folds[[i]])
+  
+  train_model <- lm(dogmatism ~  sentiment, da = train_folds)
+  
+  test_error <- predict(train_model, predict_fold, allow.new.levels = T)
+  
+  error[i] <- ModelMetrics::rmse(predict_fold$dogmatism,test_error)
+
+
+}
+
+mean(error, na.rm = T)
+
+2.52
+
+
+
+```
+
+
+```{r}
+p_load(tidyverse, stringr, lmerTest, boot, sjPlot, sjmisc, sjlabelled)
+
+
+
+
+mdl = glm(class ~ confidence + you + me + compromise + sentiment, quant_reddit ,family="binomial")
+
+set_theme(
+  base = theme_sjplot(),
+  axis.title.size = .85, 
+  axis.textsize = .85, 
+  legend.size = .8, 
+  geom.label.size = 3.5
+)
+
+sjp.glm(mdl, type = "slope", facet.grid = FALSE, show.ci = TRUE, vars = "Diagnosis")
+
+
+```
+
+```{r}
+p_load(boot, caret,pROC)
+#first a column of predictions from the model is created
+
+quant_reddit <- quant_reddit %>% 
+  mutate(mdl_predictions_perc = inv.logit(predict(mdl, quant_reddit)),
+         predictions = ifelse(mdl_predictions_perc > 0.5, "non_dogmatic","dogmatic"),
+         predictions = as.factor(predictions)) #Schizophrenia is coded as 1
+
+
+caret::confusionMatrix(data = quant_reddit$predictions, reference = quant_reddit$class, positive = "dogmatic") 
+
+rocCurve <- roc(response = quant_reddit$class,   predictor = quant_reddit$mdl_predictions_perc) 
+auc(rocCurve) 
+ci(rocCurve) 
+plot.roc(rocCurve)
+
+
+```
+```{r}
+#cross val without repeated measures
+
+
+
+cross_validation <- function(data = da, folds_col, model_formula, perc = 0.5, above_perc, below_perc, positive){ 
+  
+  
+  folds <- createFolds(folds_col, 15)
+  
+  #running loop
+  cross_val <- sapply(seq_along(folds), function(x) {
+    
+    train_folds = filter(data, !(as.numeric(post_id) %in% folds[[x]]))
+    predict_fold = filter(data, as.numeric(post_id) %in% folds[[x]])
+    
+    train_model <-  glm(model_formula, train_folds ,family="binomial")
+    
+    
+    predict_fold <- predict_fold %>% 
+      mutate(predictions_perc = inv.logit(predict(train_model, predict_fold, allow.new.levels = T)),
+             predictions = ifelse(predictions_perc > perc, above_perc,below_perc),
+             predictions = as.factor(predictions))
+    
+    conf_mat <- caret::confusionMatrix(data = predict_fold$predictions, reference = predict_fold$class, positive = positive) 
+    
+    accuracy <- conf_mat$overall[1]
+    sensitivity <- conf_mat$byClass[1]
+    specificity <- conf_mat$byClass[2]
+    
+    predict_fold$class <- as.factor(predict_fold$class)
+    rocCurve <- roc(response = predict_fold$class,   predictor = predict_fold$predictions_perc)
+    
+    auc = auc(rocCurve) 
+    
+    
+    fixed_ef <- coef(train_model) 
+    
+    output <- c(accuracy, sensitivity, specificity, auc, fixed_ef)
+    
+    
+  })
+  
+  cross_df <- t(cross_val) %>% 
+    as.data.frame() %>% 
+    rename("auc" ="V4")
+  
+  
+  return(cross_df)
+}
+
+
+mdl_formula <- as.formula(class ~ confidence + you + me + compromise + sentiment)
+
+Result <- cross_validation(data = quant_reddit,
+                           folds_col = quant_reddit$post_id,
+                           model_formula = mdl_formula,
+                           perc = 0.5,
+                           above_perc = "non_dogmatic",
+                           below_perc = "dogmatic",
+                           positive = "dogmatic")
+
+Result %>% 
+  as.data.frame() %>% 
+  select(auc) %>% 
+  summarise_all(funs(mean))
+
+```
+
+Repeating analysis for twitter data
+```{r}
+mdl_formula <- as.formula(class ~ 1)
+
+Result <- cross_validation(data = quant_reddit,
+                           folds_col = quant_reddit$post_id,
+                           model_formula = mdl_formula,
+                           perc = 0.5,above_perc = "non_dogmatic",
+                           below_perc = "dogmatic",
+                           positive = "dogmatic")
+Result %>% 
+  select(auc) %>% 
+  summarise_all(funs(mean))
+```
+
+```{r}
+mdl_formula <- as.formula(class ~ confidence)
+
+Result <- cross_validation(data = quant_reddit,
+                           folds_col = quant_reddit$post_id,
+                           model_formula = mdl_formula,
+                           perc = 0.5,above_perc = "non_dogmatic",
+                           below_perc = "dogmatic",
+                           positive = "dogmatic")
+Result %>% 
+  select(auc) %>% 
+  summarise_all(funs(mean))
+```
+
+```{r}
+mdl_formula <- as.formula(class ~ you)
+
+Result <- cross_validation(data = quant_reddit,
+                           folds_col = quant_reddit$post_id,
+                           model_formula = mdl_formula,
+                           perc = 0.5,above_perc = "non_dogmatic",
+                           below_perc = "dogmatic",
+                           positive = "dogmatic")
+Result %>% 
+  select(auc) %>% 
+  summarise_all(funs(mean))
+```
+
+```{r}
+mdl_formula <- as.formula(class ~  me)
+
+Result <- cross_validation(data = quant_reddit,
+                           folds_col = quant_reddit$post_id,
+                           model_formula = mdl_formula,
+                           perc = 0.5,above_perc = "non_dogmatic",
+                           below_perc = "dogmatic",
+                           positive = "dogmatic")
+Result %>% 
+  select(auc) %>% 
+  summarise_all(funs(mean))
+```
+
+```{r}
+mdl_formula <- as.formula(class ~ you + me)
+
+Result <- cross_validation(data = quant_reddit,
+                           folds_col = quant_reddit$post_id,
+                           model_formula = mdl_formula,
+                           perc = 0.5,above_perc = "non_dogmatic",
+                           below_perc = "dogmatic",
+                           positive = "dogmatic")
+Result %>% 
+  select(auc) %>% 
+  summarise_all(funs(mean))
+```
+
+```{r}
+mdl_formula <- as.formula(class ~ compromise)
+
+Result <- cross_validation(data = quant_reddit,
+                           folds_col = quant_reddit$post_id,
+                           model_formula = mdl_formula,
+                           perc = 0.5,above_perc = "non_dogmatic",
+                           below_perc = "dogmatic",
+                           positive = "dogmatic")
+Result %>% 
+  select(auc) %>% 
+  summarise_all(funs(mean))
+```
+
+```{r}
+mdl_formula <- as.formula(class ~ sentiment)
+
+Result <- cross_validation(data = quant_reddit,
+                           folds_col = quant_reddit$post_id,
+                           model_formula = mdl_formula,
+                           perc = 0.5,above_perc = "non_dogmatic",
+                           below_perc = "dogmatic",
+                           positive = "dogmatic")
+Result %>% 
+  select(auc) %>% 
+  summarise_all(funs(mean))
+```
+
+
+```{r}
+mdl_formula <- as.formula(class ~  you + me + sentiment )
+
+Result <- cross_validation(data = quant_reddit,
+                           folds_col = quant_reddit$post_id,
+                           model_formula = mdl_formula,
+                           perc = 0.5,above_perc = "non_dogmatic",
+                           below_perc = "dogmatic",
+                           positive = "dogmatic")
+Result %>% 
+  select(auc) %>% 
+  summarise_all(funs(mean))
+```
+
+
+
+```{r}
+mdl_formula <- as.formula(class ~ disgust)
+
+Result <- cross_validation(data = quant_reddit,
+                           folds_col = quant_reddit$post_id,
+                           model_formula = mdl_formula,
+                           perc = 0.5,above_perc = "non_dogmatic",
+                           below_perc = "dogmatic",
+                           positive = "dogmatic")
+Result %>% 
+  select(auc) %>% 
+  summarise_all(funs(mean))
+```
+```{r}
+mdl_formula <- as.formula(class ~ anger)
+
+Result <- cross_validation(data = quant_reddit,
+                           folds_col = quant_reddit$post_id,
+                           model_formula = mdl_formula,
+                           perc = 0.5,above_perc = "non_dogmatic",
+                           below_perc = "dogmatic",
+                           positive = "dogmatic")
+Result %>% 
+  select(auc) %>% 
+  summarise_all(funs(mean))
+```
+
+
+```{r}
+mdl_formula <- as.formula(class ~ fear + anger + disgust + sentiment + you + me + trust)
+
+Result <- cross_validation(data = quant_reddit,
+                           folds_col = quant_reddit$post_id,
+                           model_formula = mdl_formula,
+                           perc = 0.5,above_perc = "non_dogmatic",
+                           below_perc = "dogmatic",
+                           positive = "dogmatic")
+Result %>% 
+  select(auc) %>% 
+  summarise_all(funs(mean))
+```
+```{r}
+mdl_formula <- as.formula(class ~ confidence + you + me + compromise + sentiment + anger + anticipation + disgust + fear + joy + sadness + surprise + trust)
+
+Result <- cross_validation(data = quant_reddit,
+                           folds_col = quant_reddit$post_id,
+                           model_formula = mdl_formula,
+                           perc = 0.5,above_perc = "non_dogmatic",
+                           below_perc = "dogmatic",
+                           positive = "dogmatic")
+Result %>% 
+  select(Sensitivity,Specificity,auc) %>% 
+  summarise_all(funs(mean))
+```
+

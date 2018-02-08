@@ -1,0 +1,202 @@
+---
+  title: "R markdown template""
+author: "Adam Finnemann"
+date: "jan 18, 2018"
+---
+
+```{r setup, include=FALSE}
+
+library(pacman)
+p_load("stringr","tidyverse", "lubridate","lmerTest", "quanteda", "tidytext")
+
+
+setwd("~/cogsci/ba_project/dogmatism_data_analysis/fast_data/dogmatism-master/data")
+
+
+nytimes = read.delim("nytimes.txt", header =F ) %>% 
+rename(txt = V1, dogmatism=V2) %>% 
+mutate(txt = as.character(txt))
+
+reddit = read.delim("reddit.txt", header =F ) %>% 
+rename(txt = V1, dogmatism = V2)%>% 
+mutate(txt = as.character(txt))
+```
+
+subsetting quantiles
+```{r}
+quantile(pol$dogmatism)
+
+quant_nytimes = nytimes %>% 
+  filter(dogmatism < 9 | dogmatism  > 12) %>% 
+  mutate(class = ifelse(dogmatism <= 9, "non_dogmatic","dogmatic"),
+         class = as.factor(class))
+
+
+```
+
+```{r}
+quantile(pol$dogmatism)
+
+quant_reddit = reddit %>% 
+  filter(dogmatism < 9 | dogmatism  > 12) %>% 
+  mutate(class = ifelse(dogmatism <= 9, "non_dogmatic","dogmatic"),
+         class = as.factor(class))
+
+```
+
+Computing bow features.
+
+```{r}
+p_load(janeaustenr)
+book = austen_books()
+
+quant_reddit$post = as.factor(1:2762)
+
+#tidyes df into word count per post
+word_per_post = quant_reddit %>% 
+  unnest_tokens(word, txt) %>% 
+#aggregates counts of words per post
+  count(post, word, sort = TRUE) %>%
+  ungroup()
+
+#total words per post
+total_words <- word_per_post %>% group_by(post) %>% summarize(total = sum(n))
+
+post_words <- left_join(word_per_post, total_words)
+post_words
+
+
+```
+casting into td-idf format. tf_idf score increases as a word is used more in a text, but punished by how much the word is used in the rest of the corpus. I.e. it finds words that are important to single documents.
+```{r}
+tf_idf <- post_words %>%
+  bind_tf_idf(word, post, n)
+
+head(tf_idf)
+```
+```{r}
+tf_idf %>% 
+  left_join(quant_reddit %>% select(post, class)) -> tf_idf
+
+
+head(tf_idf)
+```
+
+```{r}
+p_load(boot, caret,pROC)
+
+
+
+cross_validation <- function(data = da, folds_col, mdl_formula, perc = 0.5, above_perc, below_perc, positive){ 
+  
+  
+  folds <- createFolds(folds_col, 15)
+  
+  #running loop
+  cross_val <- sapply(seq_along(folds), function(x) {
+    
+    train_folds = filter(data, !(as.numeric(post) %in% folds[[x]]))
+    predict_fold = filter(data, as.numeric(post) %in% folds[[x]])
+    
+    train_model <-  glm(mdl_formula, train_folds ,family="binomial")
+    
+    
+    predict_fold <- predict_fold %>% 
+      mutate(predictions_perc = inv.logit(predict(train_model, predict_fold, allow.new.levels = T)),
+             predictions = ifelse(predictions_perc > perc, above_perc,below_perc),
+             predictions = as.factor(predictions))
+    
+    conf_mat <- caret::confusionMatrix(data = predict_fold$predictions, reference = predict_fold$class, positive = positive) 
+    
+    accuracy <- conf_mat$overall[1]
+    sensitivity <- conf_mat$byClass[1]
+    specificity <- conf_mat$byClass[2]
+    
+    predict_fold$class <- as.factor(predict_fold$class)
+    rocCurve <- roc(response = predict_fold$class,   predictor = predict_fold$predictions_perc)
+    
+    auc = auc(rocCurve) 
+    
+    
+    fixed_ef <- coef(train_model) 
+    
+    output <- c(accuracy, sensitivity, specificity, fixed_ef, auc)
+    
+  })
+  
+  cross_df <- t(cross_val)
+  return(cross_df)
+}
+
+
+mdl_formula <- as.formula(class ~ tf_idf)
+
+tf_idf = as.data.frame(tf_idf)
+
+Result <- cross_validation(data = tf_idf,folds_col = tf_idf$post ,mdl_formula = mdl_formula,perc = 0.5,above_perc = "non_dogmatic", below_perc = "dogmatic", positive = "dogmatic")
+
+Result %>% 
+  as.data.frame() %>% 
+  rename(auc = V6) %>% 
+  summarise_all(funs(mean))
+
+```
+
+
+```{r}
+
+mdl = glm(class ~ tf_idf, data = tf_idf, family = "binomial")
+summary(mdl)
+```
+
+```{r}
+mdl_predictions_perc = inv.logit(predict(mdl, tf_idf))
+tf_idf$mdl_predictions_perc = mdl_predictions_perc
+
+
+tf_idf <- tf_idf %>% 
+  mutate(mdl_predictions_perc = inv.logit(predict(mdl, tf_idf)))
+
+
+tf_idf = tf_idf %>% 
+  mutate(predictions = ifelse(mdl_predictions_perc > 0.5, "non_dogmatic","dogmatic"),
+         predictions = as.factor(predictions)) #Schizophrenia is coded as 1
+
+
+caret::confusionMatrix(data = tf_idf$predictions, reference = tf_idf$class, positive = "dogmatic") 
+
+rocCurve <- roc(response = tf_idf$class,   predictor = tf_idf$mdl_predictions_perc) 
+auc(rocCurve) 
+ci(rocCurve) 
+plot.roc(rocCurve)
+
+```
+Regulization with Ridge Regression (penalizes with L2 norm)
+```{r}
+p_load(glmnet)
+# load data
+predictor_columns <- tf_idf %>% 
+  select(tf_idf) %>%  
+  as.matrix
+
+outcome_column <- tf_idf %>% 
+  select(class) %>%
+  as.matrix
+# fit model
+tf_idf$ones <- rep(1, nrow(tf_idf))
+
+fit <- glmnet(predictor_columns, outcome_column, family = "binomial", alpha=0, lambda=0.001)
+
+# summarize the fit
+summary(fit)
+# make predictions
+predictions <- predict(fit, predictor_columns , type="link")
+
+# summarize accuracy
+ridge_mse <- mean((outcome_column - predictions)^2)
+
+
+print(ridge_mse)
+
+
+```

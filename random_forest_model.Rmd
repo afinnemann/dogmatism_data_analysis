@@ -1,0 +1,162 @@
+---
+title: "R random forest"
+author: "Adam Finnemann"
+date: "jan 18, 2018"
+---
+  
+```{r setup, include=FALSE}
+
+library(pacman)
+p_load("stringr","tidyverse", "lubridate","lmerTest", rpart, caret, boot, pROC, randomForest)
+
+
+
+setwd("~/cogsci/ba_project/dogmatism_data_analysis")
+quant_pol = read.csv("preprocessed_pol.csv")
+quant_reddit = read.csv("preprocessed_reddit.csv")
+```
+
+
+
+
+
+#SVM test on sentiment + you
+
+```{r}
+library(rpart)
+
+x <- cbind(x_train,y_train)
+# grow tree 
+
+#forest model
+fit <- rpart(class ~ ., data = quant_reddit[,c(3,5:89)],method="class")
+
+quant_reddit <- quant_reddit %>% 
+  mutate(predictions_perc = predict(fit, quant_reddit[,c(3,5:89)], probability = T)[,1],
+         predictions = ifelse(predictions_perc > 0.5, "dogmatic","non_dogmatic"),
+         predictions = as.factor(predictions))
+
+
+caret::confusionMatrix(data = quant_reddit$predictions, reference = quant_reddit$class, positive = "dogmatic") 
+
+rocCurve <- roc(response = quant_reddit$class,   predictor = quant_reddit$predictions_perc) 
+auc(rocCurve) 
+ci(rocCurve) 
+plot.roc(rocCurve)
+
+```
+Random forest model
+```{r}
+fit <- randomForest(class ~ ., quant_reddit[,c(3,5:89)],ntree=500)
+
+
+quant_reddit <- quant_reddit %>% 
+  mutate(predictions = predict(fit, quant_reddit[,c(3,5:89)]))
+
+
+summary(fit)
+caret::confusionMatrix(data = quant_reddit$predictions, reference = quant_reddit$class, positive = "dogmatic")       
+
+
+```
+
+```{r}
+
+varImpPlot(fit)
+```
+
+
+
+Cross validation
+```{r}
+
+p_load(plyr)
+
+cross_validation <- function(data = da, folds_col){ 
+  
+  
+  folds <- createFolds(folds_col, 15)
+  x = 1
+  #running loop
+  cross_val <- ldply(seq_along(folds), function(x) {
+    
+    train_folds = filter(data, !(as.numeric(post_id) %in% folds[[x]]))
+    predict_fold = filter(data, as.numeric(post_id) %in% folds[[x]])
+    
+    fit = randomForest(class ~ ., train_folds[,c(3,5:89)],ntree=500)
+    
+    
+    predict_fold <- predict_fold %>% 
+  mutate(predictions_perc = predict(fit, predict_fold[,c(3,5:89)], type = "prob")[,1],
+         predictions = ifelse(predictions_perc > 0.5, "dogmatic","non_dogmatic"),
+         predictions = as.factor(predictions))
+         
+    rocCurve <- roc(response = predict_fold$class,   predictor = predict_fold$predictions_perc) 
+    output <- auc(rocCurve)
+    
+    #subsetting 5 most important factors from random forest
+    vigtig = fit$importance %>% 
+      as.data.frame() %>% 
+      rownames_to_column() %>% 
+      arrange(MeanDecreaseGini) %>% 
+      slice(80:85) %>% 
+      mutate(auc = rep(output,6))
+    
+    print(paste("|", glue::collapse(rep("==",x)), glue::collapse(rep("  ",15-x)), "|", sep = ""))
+    x = x +1
+    
+    vigtig = fit$importance %>% 
+      as.data.frame() %>% 
+      rownames_to_column() %>% 
+      arrange(MeanDecreaseGini) %>% 
+      slice(75:85) %>% 
+      mutate(auc = rep(output,11))
+      
+  })
+  
+  cross_val %>% 
+    group_by(rowname) %>% 
+    dplyr::summarise(mean_dec = mean(MeanDecreaseGini)) -> important_variables
+  auc = mean(cross_val$auc[seq(1,90, 6)])
+  
+  return(list(auc, important_variables))
+}
+
+
+
+Result <- cross_validation(data = quant_reddit,
+                           folds_col = quant_reddit$post_id)
+
+auc = Result[1]
+imp_var = Result[2]
+
+```
+
+```{r}
+auc
+```
+```{r}
+imp_var %>% 
+  as.data.frame() %>% 
+  arrange(mean_dec)
+```
+
+```{r}
+mdl = glm(class ~ Self + Social+ negative + Negemo + Negate + Present + Othref + You + sent_len + Past, data = quant_reddit, family = "binomial")
+
+summary(mdl)
+
+```
+
+```{r}
+quant_pol <- quant_pol %>% 
+  mutate(predictions_perc = predict(fit, quant_pol[,c(3,5:89)], type = "prob")[,1],
+         predictions = ifelse(predictions_perc > 0.5, "dogmatic","non_dogmatic"),
+         predictions = as.factor(predictions))
+    
+rocCurve <- roc(response = quant_pol$class,   predictor = quant_pol$predictions_perc) 
+auc(rocCurve) 
+ci(rocCurve) 
+plot.roc(rocCurve)
+```
+

@@ -1,0 +1,172 @@
+---
+title: "Principal component"
+author: "Adam Finnemann"
+date: "jan 18, 2018"
+---
+  
+```{r setup, include=FALSE}
+
+library(pacman)
+p_load("stringr","tidyverse", "lubridate","lmerTest")
+p_load(boot, caret,pROC)
+library(e1071)
+
+setwd("~/cogsci/ba_project/dogmatism_data_analysis")
+quant_pol = read.csv("preprocessed_pol.csv")
+quant_reddit = read.csv("preprocessed_reddit.csv")
+```
+
+
+PCA analysis disregarding column 88 and 89 with too few obsevations to generate SDs.
+```{r}
+library(psych)
+library(corrgram)
+
+
+#checking for sufficient covariance
+#the corrgram shows darker areas indicating covariance among predictors
+corrgram(quant_reddit[,5:87], col.regions = colorRampPalette(c("dodgerblue4",'dodgerblue','white', 'gold',"firebrick4")),cor.method='pearson')
+
+
+cortest.bartlett(quant_reddit[,5:87]) # yields significant result, Chisq(28) = 2626, p = 0. In other words the correlation matrix is significantly different from an identity-matrix
+
+
+
+#Principle component analysis:
+pca <- principal(quant_reddit[,5:87], nfactors = length(5:87), scores = TRUE)
+
+#Scree plot
+plot(pca$values, type = "b")
+#keeping 4 factors, although the first component seems to reflect most of covariance.
+
+pc1 <- principal(quant_reddit[,5:87], nfactors = 6, scores = TRUE)
+
+#we can check out factor loadings:
+print.psych(pc1, cut = 0.4, sort = TRUE) #very sensible components
+
+
+#creating a dataframe to model from
+pca_data <- cbind(quant_reddit, pc1$scores)
+```
+
+```{r}
+library(boot)
+cross_validation <- function(data = da, folds_col, mdl_formula){ 
+  
+  
+  folds <- createFolds(folds_col, 10)
+  
+  #running loop
+  cross_val <- sapply(seq_along(folds), function(x) {
+    
+    train_folds = filter(data, !(as.numeric(post_id) %in% folds[[x]]))
+    predict_fold = filter(data, as.numeric(post_id) %in% folds[[x]])
+    
+    svmfit = glm(mdl_formula , train_folds, family = "binomial")
+    
+
+predict_fold <- predict_fold %>% 
+  mutate(predictions_perc = inv.logit(predict(svmfit, predict_fold)),
+         predictions = ifelse(predictions_perc > 0.5, "dogmatic","non_dogmatic"),
+         predictions = as.factor(predictions))
+
+
+rocCurve <- roc(response = predict_fold$class,   predictor = predict_fold$predictions_perc) 
+
+    output <- auc(rocCurve)
+    
+    
+  })
+  
+  auc = mean(cross_val)
+  
+  return(auc)
+}
+
+
+
+Result <- cross_validation(data = pca_data,
+                           folds_col = pca_data$post_id,
+                           mdl_formula = as.formula(class ~ RC1 + RC2 + RC3 + RC4 + RC5 + RC6))
+
+Result
+```
+
+```{r}
+Result <- cross_validation(data = pca_data,
+                           folds_col = pca_data$post_id,
+                           mdl_formula = as.formula(class ~ RC1 ))
+
+Result
+```
+
+```{r}
+Result <- cross_validation(data = pca_data,
+                           folds_col = pca_data$post_id,
+                           mdl_formula = as.formula(class ~ RC2))
+
+Result
+```
+
+```{r}
+Result <- cross_validation(data = pca_data,
+                           folds_col = pca_data$post_id,
+                           mdl_formula = as.formula(class ~ RC3))
+
+Result
+```
+
+```{r}
+Result <- cross_validation(data = pca_data,
+                           folds_col = pca_data$post_id,
+                           mdl_formula = as.formula(class ~ RC4))
+
+Result
+```
+
+```{r}
+Result <- cross_validation(data = pca_data,
+                           folds_col = pca_data$post_id,
+                           mdl_formula = as.formula(class ~ RC5))
+
+Result
+```
+
+```{r}
+Result <- cross_validation(data = pca_data,
+                           folds_col = pca_data$post_id,
+                           mdl_formula = as.formula(class ~  RC6))
+
+Result
+```
+
+
+```{r}
+Result <- cross_validation(data = pca_data,
+                           folds_col = pca_data$post_id,
+                           mdl_formula = as.formula(class ~  RC3 + RC6))
+
+Result
+
+``` 
+Prediciting from first-person and other-person components yields accuracy of 80% !
+Does this indicate a defensive mechanism arising from dogmatism? 
+
+```{r}
+Result <- cross_validation(data = pca_data,
+                           folds_col = pca_data$post_id,
+                           mdl_formula = as.formula(class ~  RC2 + RC6))
+
+Result
+```
+
+
+```{r}
+Result <- cross_validation(data = pca_data,
+                           folds_col = pca_data$post_id,
+                           mdl_formula = as.formula(class ~ RC6))
+
+Result
+```
+
+

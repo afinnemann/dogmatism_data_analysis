@@ -1,0 +1,43 @@
+---
+  title: "R markdown template""
+author: "Adam Finnemann"
+date: "jan 18, 2018"
+---
+
+```{r setup, include=FALSE}
+
+library(pacman)
+p_load("stringr","tidyverse", "lubridate")
+
+
+setwd("~/cogsci/ba_project/dogmatism_data_analysis/twitter_data")
+
+da <- read.csv("debate1_2012.csv") 
+summary <- read.csv("debate1_2012_summary.csv")
+tweet <- read.csv("tweets1_2012_sentiment.csv")
+
+
+
+
+```
+
+```{r}
+da = da %>% 
+  mutate(created_at = ymd_hms(created_at))
+
+tweet = tweet %>% 
+  mutate(created_at = ymd_hms(created_at))
+
+
+ ymd_hms(tweet$created_at[1:10])
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
